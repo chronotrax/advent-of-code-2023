@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 type Converter struct {
@@ -64,37 +64,65 @@ func main() {
 
 	// apply maps
 	lowest := -1
+	wg := sync.WaitGroup{}
+	mu := &sync.Mutex{}
 
-	for _, sr := range seeds {
-		for s := sr.start; s < sr.start+sr.length; s++ {
-			seed := s
-			for _, m := range maps {
-				var converter *Converter
+	// use goroutines to check each seed range async
+	for _, seedRange := range seeds {
+		s := seedRange
+		wg.Add(1)
 
-				// find converter in range
-				for _, c := range m.converters {
-					if seed >= c.sourceStart && seed < c.sourceStart+c.length {
-						converter = &c
-						break
-					}
+		go func() {
+			defer wg.Done()
+			res := applyMaps(s, maps)
+
+			mu.Lock()
+			if lowest == -1 || res < lowest {
+				lowest = res
+			}
+			mu.Unlock()
+		}()
+	}
+
+	wg.Wait()
+	fmt.Println(lowest)
+}
+
+// calculates the lowest location in the range of seeds
+func applyMaps(sr SeedRange, maps []Map) int {
+	lowest := -1
+
+	// for every seed in the range
+	for s := sr.start; s < sr.start+sr.length; s++ {
+		seed := s
+
+		// apply each map
+		for _, m := range maps {
+			var converter *Converter
+
+			// check each converter if seed needs to be converted
+			for _, c := range m.converters {
+				if seed >= c.sourceStart && seed < c.sourceStart+c.length {
+					converter = &c
+					break
 				}
-
-				// skip converting if no converter
-				if converter == nil {
-					continue
-				}
-
-				// convert
-				seed = converter.destStart + (seed - converter.sourceStart)
 			}
 
-			if lowest == -1 || seed < lowest {
-				lowest = seed
+			// skip converting if no converter
+			if converter == nil {
+				continue
 			}
+
+			// convert
+			seed = converter.destStart + (seed - converter.sourceStart)
+		}
+
+		if lowest == -1 || seed < lowest {
+			lowest = seed
 		}
 	}
 
-	fmt.Println(lowest)
+	return lowest
 }
 
 func readMap(scan *bufio.Scanner) *Map {
@@ -129,19 +157,6 @@ func readMap(scan *bufio.Scanner) *Map {
 
 		m.converters = append(m.converters, c)
 	}
-
-	// sort map's converters based on source start
-	slices.SortFunc[[]Converter, Converter](m.converters, func(a, b Converter) int {
-		if a.sourceStart < b.sourceStart {
-			return -1
-		}
-
-		if a.sourceStart > b.sourceStart {
-			return 1
-		}
-
-		return 0
-	})
 
 	return &m
 }
